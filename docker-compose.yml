@@ -1,0 +1,19 @@
+services:
+  openclaw:
+    image: openclaw:latest
+    volumes:
+      - claw-data:/data   # workspace/ and skills/ live here
+
+  live-files-server:
+    build: .
+    environment:
+      LF_ROOTS: "workspace=/workspace,skills=/workspace/skills"
+      LF_INCLUDE_EXT: "md"
+      LF_POLL_INTERVAL_MS: "3000"
+    volumes:
+      - ${OPENCLAW_WORKSPACE:-/opt/1panel/apps/openclaw/OpenClaw/data/workspace}:/workspace:ro
+    ports:
+      - "8080:8080"
+
+volumes:
+  claw-data:
