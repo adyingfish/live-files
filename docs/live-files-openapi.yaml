@@ -1,0 +1,296 @@
+openapi: 3.1.0
+info:
+  title: live-files API
+  version: 0.1.0
+  description: |
+    本地文件监听 + HTTP/SSE 暴露服务。把一组「命名根目录(roots)」下的文本/代码文件
+    暴露给客户端浏览,并在文件变动时通过 SSE 实时推送。
+
+    - 路径对外统一为「root 名 + root 内相对路径」的正斜杠形式,不暴露宿主机绝对路径。
+    - 仅支持文本/代码类文件(md、json、py 等),`content` 恒为 UTF-8 文本,不支持二进制。
+    - 可见性由统一的白名单闸门控制,list / read / events 三处入口一致生效。
+servers:
+  - url: http://localhost:8080
+    description: 本地默认部署
+
+paths:
+  /api/files:
+    get:
+      operationId: listFiles
+      summary: 列出各 root 下符合过滤规则的文件(树形)
+      description: 默认返回所有 root;指定 `root` 时只返回该 root(`roots` 数组长度为 1)。
+      parameters:
+        - name: root
+          in: query
+          required: false
+          description: 只看某个 root 的逻辑名,如 `workspace`。省略则返回全部 root。
+          schema:
+            type: string
+          example: workspace
+      responses:
+        "200":
+          description: 文件树
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FilesResponse"
+              example:
+                roots:
+                  - root: workspace
+                    tree:
+                      - name: notes
+                        type: dir
+                        children:
+                          - name: todo.md
+                            type: file
+                            path: workspace/notes/todo.md
+                            size: 1024
+                            modifiedAt: "2026-05-27T10:00:00Z"
+                      - name: readme.md
+                        type: file
+                        path: workspace/readme.md
+                        size: 512
+                        modifiedAt: "2026-05-27T09:30:00Z"
+                  - root: skills
+                    tree:
+                      - name: search.md
+                        type: file
+                        path: skills/search.md
+                        size: 2048
+                        modifiedAt: "2026-05-26T18:00:00Z"
+        "404":
+          description: 指定的 root 不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/file:
+    get:
+      operationId: readFile
+      summary: 读取单个文件内容
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: 逻辑路径「root 名/相对路径」。
+          schema:
+            type: string
+          example: workspace/notes/todo.md
+        - name: If-None-Match
+          in: header
+          required: false
+          description: 条件请求;与当前 `etag` 一致时返回 304。
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 文件内容
+          headers:
+            ETag:
+              description: 内容指纹(hash 或 mtime),用于条件请求。
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileContent"
+              example:
+                path: workspace/notes/todo.md
+                content: "# Todo\n- ..."
+                size: 1024
+                modifiedAt: "2026-05-27T10:00:00Z"
+                etag: "\"<hash-or-mtime>\""
+        "304":
+          description: 内容未变(命中 If-None-Match),无响应体
+        "400":
+          description: 缺少或非法的 path 参数
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: 路径穿越,或文件不在白名单/过滤规则的可见范围内
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: root 或文件不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: 文件超过 max_file_bytes 上限
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/events:
+    get:
+      operationId: streamEvents
+      summary: 文件变动事件流(SSE)
+      description: |
+        以 `text/event-stream` 持续推送文件变动。客户端用 `EventSource` 连接,
+        收到事件后按需重新拉取 `/api/files` 或 `/api/file`。事件只携带「哪个文件变了」,
+        不含文件内容。
+
+        每条事件形如:
+
+        ```
+        event: change
+        id: 1716800000123
+        data: {"kind":"modified","path":"workspace/notes/todo.md","modifiedAt":"2026-05-27T10:00:00Z"}
+        ```
+
+        服务端定期发送注释行(以 `:` 开头)作为心跳,防止代理掐断空闲连接。
+        `data` 字段的 JSON 结构见 `ChangeEvent`。
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          required: false
+          description: 断线重连时由浏览器自动带上,用于从上次的事件 id 续传。
+          schema:
+            type: string
+      responses:
+        "200":
+          description: SSE 事件流
+          headers:
+            Content-Type:
+              schema:
+                type: string
+                const: text/event-stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: |
+                event: change
+                id: 1716800000123
+                data: {"kind":"modified","path":"workspace/notes/todo.md","modifiedAt":"2026-05-27T10:00:00Z"}
+
+                event: change
+                data: {"kind":"created","path":"skills/new.md"}
+
+                event: change
+                data: {"kind":"deleted","path":"workspace/old.md"}
+
+                : keep-alive
+
+components:
+  schemas:
+    FilesResponse:
+      type: object
+      required: [roots]
+      properties:
+        roots:
+          type: array
+          items:
+            $ref: "#/components/schemas/RootTree"
+
+    RootTree:
+      type: object
+      required: [root, tree]
+      properties:
+        root:
+          type: string
+          description: root 的逻辑名
+        tree:
+          type: array
+          items:
+            $ref: "#/components/schemas/FileNode"
+
+    FileNode:
+      description: 文件树节点,按 `type` 区分文件与目录。
+      oneOf:
+        - $ref: "#/components/schemas/FileNodeFile"
+        - $ref: "#/components/schemas/FileNodeDir"
+      discriminator:
+        propertyName: type
+        mapping:
+          file: "#/components/schemas/FileNodeFile"
+          dir: "#/components/schemas/FileNodeDir"
+
+    FileNodeFile:
+      type: object
+      required: [name, type, path, size]
+      properties:
+        name:
+          type: string
+        type:
+          const: file
+        path:
+          type: string
+          description: 逻辑路径「root 名/相对路径」,可直接传给 /api/file。
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+          description: 文件在磁盘上的字节数(非字符数)。
+        modifiedAt:
+          type: [string, "null"]
+          format: date-time
+
+    FileNodeDir:
+      type: object
+      required: [name, type, children]
+      properties:
+        name:
+          type: string
+        type:
+          const: dir
+        children:
+          type: array
+          items:
+            $ref: "#/components/schemas/FileNode"
+
+    FileContent:
+      type: object
+      required: [path, content, size]
+      properties:
+        path:
+          type: string
+        content:
+          type: string
+          description: UTF-8 文本内容。
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+          description: 文件在磁盘上的字节数(非字符数)。
+        modifiedAt:
+          type: [string, "null"]
+          format: date-time
+        etag:
+          type: string
+
+    ChangeEvent:
+      description: SSE `data` 字段的 JSON 负载。
+      type: object
+      required: [kind, path]
+      properties:
+        kind:
+          type: string
+          enum: [created, modified, deleted, renamed]
+        path:
+          type: string
+          description: 逻辑路径「root 名/相对路径」。
+        from:
+          type: string
+          description: 仅 `renamed` 时出现,表示旧路径。
+        modifiedAt:
+          type: [string, "null"]
+          format: date-time
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: 错误类型标识。
+        message:
+          type: string
+          description: 可读的错误描述。
