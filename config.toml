@@ -1,0 +1,7 @@
+port = 8080
+include_ext = ["md"]
+max_file_bytes = 10_485_760 # 10 MiB
+
+[[roots]]
+name = "docs"
+path = "./docs"
