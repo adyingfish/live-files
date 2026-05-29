@@ -17,6 +17,29 @@ pub struct ConfigFile {
     pub max_file_bytes: Option<u64>,
     #[serde(default)]
     pub roots: Vec<RootEntry>,
+    /// supervisor 上报服务的鉴权/地址配置,缺省则不向 supervisor 转发。
+    pub supervisor: Option<SupervisorConfig>,
+}
+
+/// supervisor 文件变化上报接口的配置。文件变动会被转发到
+/// `{base_url}{events_path}`,并带 `Authorization: Bearer <access_token>`。
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct SupervisorConfig {
+    /// supervisor 服务基址,例如 `https://supervisor.example.com`。
+    pub base_url: String,
+    /// 上报路径,默认 `/api/v1/finder/events`。
+    #[serde(default = "default_events_path")]
+    pub events_path: String,
+    /// 调用上报接口的 API access token,作为 Bearer 凭证。
+    pub access_token: String,
+    /// 是否启用上报,默认 true。设为 false 可在保留配置的同时临时关闭转发。
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_events_path() -> String {
+    "/api/v1/finder/events".to_string()
 }
 
 #[derive(Deserialize)]

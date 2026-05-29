@@ -6,6 +6,7 @@ mod api;
 mod assets;
 mod config_file;
 mod sse;
+mod supervisor;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -14,6 +15,7 @@ use std::time::Duration;
 
 use axum::{routing::get, Router};
 use clap::Parser;
+use config_file::SupervisorConfig;
 use live_files_core::{Config, Root, Watcher};
 
 pub(crate) type AppState = Arc<Watcher>;
@@ -44,8 +46,9 @@ struct Cli {
     poll_interval_ms: Option<u64>,
 }
 
-fn build_config(cli: Cli) -> anyhow::Result<(Config, u16)> {
+fn build_config(cli: Cli) -> anyhow::Result<(Config, u16, Option<SupervisorConfig>)> {
     let file = config_file::load(&cli.config)?;
+    let supervisor = file.supervisor.clone();
 
     // Roots 优先级:CLI/环境变量 → config.toml
     let roots: Vec<Root> = if !cli.roots.is_empty() {
@@ -113,14 +116,26 @@ fn build_config(cli: Cli) -> anyhow::Result<(Config, u16)> {
         ..defaults
     };
 
-    Ok((config, port))
+    Ok((config, port, supervisor))
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let (config, port) = build_config(cli)?;
+    let (config, port, supervisor) = build_config(cli)?;
     let watcher: AppState = Arc::new(Watcher::new(config)?);
+
+    // 文件变动除经自有 SSE 推送外,按需转发到 supervisor 上报接口。
+    if let Some(sup) = supervisor {
+        if sup.enabled {
+            println!(
+                "forwarding file changes to supervisor: {}{}",
+                sup.base_url.trim_end_matches('/'),
+                sup.events_path
+            );
+            supervisor::spawn(&watcher, sup);
+        }
+    }
 
     let app = Router::new()
         .route("/api/files", get(api::files))

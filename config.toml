@@ -5,3 +5,11 @@ max_file_bytes = 10_485_760 # 10 MiB
 [[roots]]
 name = "docs"
 path = "./docs"
+
+# 将文件变动上报到 supervisor 的 finder/events 接口(详见 docs/openclaw-finder-api.md)。
+# 取消注释并填入实际地址与 token 后,文件变动会在自有 SSE 之外额外转发到 supervisor。
+# [supervisor]
+# base_url = "https://supervisor.example.com"
+# access_token = "<api_access_token>"
+# events_path = "/api/v1/finder/events"  # 可选,默认即此值
+# enabled = true                          # 可选,默认 true

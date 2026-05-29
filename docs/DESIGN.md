@@ -183,6 +183,27 @@ data: {"kind":"deleted","path":"workspace/old.md"}
 - 本地开发:`cargo run --features debug-frontend`,`GET /` 可用。
 - 生产 / Docker 构建:**不启用**该 feature,前端资源不被打包,binary 更小,`GET /` 不存在(只保留 `/api/*`)。详见 §7.1。
 
+### 4.5 向 supervisor 上报文件变动(可选)
+
+除自有 SSE(§4.3)外,文件变动事件还可**转发到 supervisor 的上报接口**,由 supervisor 再广播给它自己的 SSE 客户端(`finder_configs_changed`)。两者并存:**自有 SSE 行为完全不变**,转发只是额外多挂一个订阅者。
+
+- **对接接口**:`POST {base_url}/api/v1/finder/events`(详见 `docs/openclaw-finder-api.md`)。
+- **鉴权**:`Authorization: Bearer <access_token>`(supervisor 侧的 API access token)。
+- **请求体**:直接是 `ChangeEvent`(§5.3)的序列化,即 `{kind, path, from?, modifiedAt?}`,字段与上报接口一一对应,无需额外转换。
+- **实现**:server 端额外起一个后台任务订阅**同一个 broadcast 通道**,每条事件 POST 出去。失败/非 2xx 仅记日志,不重试、不阻塞自有 SSE。
+- **配置**:`config.toml` 的 `[supervisor]` 段,缺省(无该段)则完全不转发;`enabled = false` 可保留配置临时关闭。
+
+配置示例:
+```toml
+[supervisor]
+base_url = "https://supervisor.example.com"
+access_token = "<api_access_token>"
+events_path = "/api/v1/finder/events"  # 可选,默认即此值
+enabled = true                          # 可选,默认 true
+```
+
+> 注意:转发的 `path` 是 live-files 的逻辑路径「root 名/相对路径」(如 `docs/foo.md`)。上报接口当前对 `path` 原样透传、不做枚举校验。
+
 ---
 
 ## 5. 核心模块设计(`live-files-core`)
@@ -430,6 +451,8 @@ live-files/
 │       │   ├── main.rs
 │       │   ├── api.rs         # REST handlers
 │       │   ├── sse.rs         # SSE handler
+│       │   ├── config_file.rs # config.toml 解析(含 [supervisor])
+│       │   ├── supervisor.rs  # 文件变动转发到 supervisor 上报接口
 │       │   └── assets/        # 调试前端(index.html 等)
 │       └── Cargo.toml
 ├── Dockerfile
