@@ -453,8 +453,11 @@ live-files/
 │       │   ├── sse.rs         # SSE handler
 │       │   ├── config_file.rs # config.toml 解析(含 [supervisor])
 │       │   ├── supervisor.rs  # 文件变动转发到 supervisor 上报接口
-│       │   └── assets/        # 调试前端(index.html 等)
+│       │   └── assets.rs      # 调试前端静态资源服务(嵌入 tests/frontend/dist/)
 │       └── Cargo.toml
+├── tests/                     # 调试/联调资产(根 .gitignore 整体忽略)
+│   ├── frontend/              # 调试前端(Vite/React,debug-frontend 嵌入其 dist/)
+│   └── mock-supervisor/       # mock Supervisor 后端(finder_configs_changed SSE 联调)
 ├── Dockerfile
 └── docker-compose.yml
 ```

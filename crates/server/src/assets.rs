@@ -1,5 +1,5 @@
 //! 调试前端静态资源服务(仅 `debug-frontend` feature 启用)。
-//! 将 `frontend/dist/` 嵌入二进制,unknown paths 回退到 index.html(SPA fallback)。
+//! 将 `tests/frontend/dist/` 嵌入二进制,unknown paths 回退到 index.html(SPA fallback)。
 
 use axum::{
     body::Body,
@@ -8,9 +8,10 @@ use axum::{
 };
 use rust_embed::RustEmbed;
 
-/// 通过 `rust-embed` 将 `frontend/dist/` 编译时嵌入二进制。
+/// 通过 `rust-embed` 将 `tests/frontend/dist/` 编译时嵌入二进制。
+/// 路径相对 crate 根(crates/server),故用 `../../` 回到仓库根。
 #[derive(RustEmbed)]
-#[folder = "frontend/dist/"]
+#[folder = "../../tests/frontend/dist/"]
 struct Assets;
 
 /// 回退路由:路径对应到嵌入文件则返回,否则返回 index.html(SPA fallback)。
