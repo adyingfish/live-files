@@ -172,16 +172,14 @@ data: {"kind":"deleted","path":"workspace/old.md"}
 - 连接建立时可先推一条 `event: snapshot`(可选),让客户端知道当前全量,避免错过历史。
 - 服务端定期发送注释行(`:`)做心跳。
 
-### 4.4 调试前端 `GET /`(可选,仅调试)
-一个**单页**调试界面(纯静态),功能:
+### 4.4 调试前端(可选,仅测试)
+一个**单页**调试界面(纯静态,位于 `tests/frontend/`),功能:
 - 左侧文件树(调 `/api/files`)。
 - 右侧 Markdown 预览(调 `/api/file`,前端渲染)。
 - 顶部连接 `/api/events`,收到变动时:对应文件高亮 + 自动刷新当前打开的文件。
 - 仅用于本地联调验证,**不是正式客户端**。
 
-**编译期开关 + 不进 Docker**:此前端通过 `debug-frontend` feature 在编译期内嵌进 binary,**默认关闭**。
-- 本地开发:`cargo run --features debug-frontend`,`GET /` 可用。
-- 生产 / Docker 构建:**不启用**该 feature,前端资源不被打包,binary 更小,`GET /` 不存在(只保留 `/api/*`)。详见 §7.1。
+**独立启动,不内嵌 binary**:此前端仅供测试,独立运行(`vp dev`),通过 vite 代理把 `/api`、`/supervisor` 转发到后端,与 server 完全解耦。server 只提供 `/api/*`,不服务任何前端资源。
 
 ### 4.5 向 supervisor 上报文件变动(可选)
 
@@ -374,7 +372,6 @@ volumes:
 FROM rust:1-bookworm AS build
 WORKDIR /app
 COPY . .
-# 不带 --features debug-frontend:生产构建不内嵌调试前端
 RUN cargo build --release --bin live-files-server
 
 FROM debian:bookworm-slim
@@ -383,7 +380,7 @@ EXPOSE 8080
 ENTRYPOINT ["live-files-server"]
 ```
 
-> **调试前端不进 Docker**:`debug-frontend` 默认关闭,生产构建不传该 feature,因此镜像里**不含**前端静态资源,`GET /` 不存在,只暴露 `/api/*`(见 §4.4)。这样镜像更小、对外面积更窄。需要在容器里联调时,再单独构建带 feature 的镜像即可。
+> **调试前端不进 Docker**:前端为独立的测试工具(`tests/frontend/`),不内嵌 binary,镜像只暴露 `/api/*`(见 §4.4)。这样镜像更小、对外面积更窄。需要联调时在本地独立起前端(`vp dev`),由 vite 代理连到容器的 `/api`。
 
 **优点**:职责清晰、独立重启、互不拖累、镜像小。
 **前提**:见下文 inotify 注意事项。
@@ -424,7 +421,7 @@ ENTRYPOINT ["live-files-server"]
 | glob 过滤 | `globset` |
 | 日志 | `tracing` / `tracing-subscriber` |
 | 错误处理 | `anyhow`(bin)/ `thiserror`(lib) |
-| 调试前端 | 内嵌静态单页(`rust-embed`),`debug-frontend` feature 编译期开关,默认关闭、不进生产/Docker |
+| 调试前端 | 独立的测试单页(`tests/frontend/`,Vite/React),独立启动、不内嵌 binary、不进生产/Docker |
 
 ---
 
@@ -452,11 +449,10 @@ live-files/
 │       │   ├── api.rs         # REST handlers
 │       │   ├── sse.rs         # SSE handler
 │       │   ├── config_file.rs # config.toml 解析(含 [supervisor])
-│       │   ├── supervisor.rs  # 文件变动转发到 supervisor 上报接口
-│       │   └── assets.rs      # 调试前端静态资源服务(嵌入 tests/frontend/dist/)
+│       │   └── supervisor.rs  # 文件变动转发到 supervisor 上报接口
 │       └── Cargo.toml
 ├── tests/                     # 调试/联调资产(根 .gitignore 整体忽略)
-│   ├── frontend/              # 调试前端(Vite/React,debug-frontend 嵌入其 dist/)
+│   ├── frontend/              # 调试前端(Vite/React,独立启动)
 │   └── mock-supervisor/       # mock Supervisor 后端(finder_configs_changed SSE 联调)
 ├── Dockerfile
 └── docker-compose.yml
@@ -470,7 +466,7 @@ live-files/
 2. **M2 — 监听**:notify 监听目录 + 去抖,事件归一化进 broadcast。
 3. **M3 — 轮询兜底**:mtime 快照 diff,与 M2 合流;可配开关。
 4. **M4 — server**:axum 暴露 `/api/files`、`/api/file`、`/api/events`(SSE)。
-5. **M5 — 调试前端**:`debug-frontend` feature 下内嵌单页,文件树 + 预览 + 实时刷新;默认关闭,生产/Docker 不打包。
+5. **M5 — 调试前端**:`tests/frontend/` 独立单页,文件树 + 预览 + 实时刷新;独立启动,生产/Docker 不打包。
 6. **M6 — 部署**:Dockerfile + docker-compose,Linux 宿主联调验证 inotify。
 7. **M7 — 复用验证**:在 Windows 上以库方式 `subscribe()` 跑通最小示例(为 md 编辑器铺路)。
 

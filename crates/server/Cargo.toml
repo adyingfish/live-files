@@ -3,11 +3,6 @@ name = "live-files-server"
 version = "0.1.0"
 edition = "2024"
 
-[features]
-# Embed the debug frontend (file tree + Markdown preview) into the binary.
-# Enabled for local development; omitted in production Docker builds.
-debug-frontend = ["dep:rust-embed", "dep:mime_guess"]
-
 [dependencies]
 live-files-core = { path = "../core" }
 axum = "0.7"
@@ -19,5 +14,3 @@ futures-util = "0.3"
 anyhow = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 toml = { version = "0.8", default-features = false, features = ["parse"] }
-rust-embed = { version = "8", optional = true }
-mime_guess = { version = "2", optional = true }

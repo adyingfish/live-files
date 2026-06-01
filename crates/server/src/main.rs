@@ -1,9 +1,7 @@
 //! live-files HTTP/SSE 服务器入口:解析 CLI/配置文件,启动 Watcher,
-//! 注册三个 API 路由(及可选的调试前端),监听端口提供 HTTP 服务。
+//! 注册三个 API 路由,监听端口提供 HTTP 服务。
 
 mod api;
-#[cfg(feature = "debug-frontend")]
-mod assets;
 mod config_file;
 mod sse;
 mod supervisor;
@@ -142,9 +140,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/file", get(api::file))
         .route("/api/events", get(sse::events))
         .with_state(Arc::clone(&watcher));
-
-    #[cfg(feature = "debug-frontend")]
-    let app = app.fallback(assets::serve);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
