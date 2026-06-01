@@ -24,6 +24,9 @@ pub struct ChangeEvent {
     /// 仅 rename 时出现,表示旧路径。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::time_fmt::serialize_opt"
+    )]
     pub modified_at: Option<SystemTime>,
 }

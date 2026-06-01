@@ -33,7 +33,10 @@ pub struct FileNode {
     pub path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::time_fmt::serialize_opt"
+    )]
     pub modified_at: Option<SystemTime>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<FileNode>>,

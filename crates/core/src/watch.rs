@@ -4,15 +4,15 @@
 //! 并通过 broadcast channel 推送给所有订阅者。
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use notify::{RecommendedWatcher, Watcher as _};
 use notify_debouncer_full::{
     new_debouncer, DebounceEventResult, DebouncedEvent, Debouncer, FileIdMap,
 };
-use tokio::sync::broadcast;
 
-use crate::{Config, Result, events::{ChangeEvent, ChangeKind}, visibility};
+use crate::{Config, Result, dispatch::Dispatcher, events::{ChangeEvent, ChangeKind}, visibility};
 
 /// 去抖监听器的持有句柄,drop 时自动停止。
 pub type WatchHandle = Debouncer<RecommendedWatcher, FileIdMap>;
@@ -24,8 +24,8 @@ struct CanonicalRoot {
     expose: Vec<String>,
 }
 
-/// 启动 notify 监听,在独立线程中运行去抖回调,事件通过 `tx` 广播。
-pub fn start(config: &Config, tx: broadcast::Sender<ChangeEvent>) -> Result<WatchHandle> {
+/// 启动 notify 监听,在独立线程中运行去抖回调,事件经 `dispatcher` 去重后广播。
+pub fn start(config: &Config, dispatcher: Arc<Dispatcher>) -> Result<WatchHandle> {
     let canonical_roots: Vec<CanonicalRoot> = config
         .roots
         .iter()
@@ -50,7 +50,7 @@ pub fn start(config: &Config, tx: broadcast::Sender<ChangeEvent>) -> Result<Watc
         dispatch(
             result,
             &canonical_roots,
-            &tx,
+            &dispatcher,
             &include_extensions,
             &ignore_set,
             include_glob_set.as_ref(),
@@ -77,7 +77,7 @@ fn build_glob_set(patterns: &[String]) -> GlobSet {
 fn dispatch(
     result: DebounceEventResult,
     canonical_roots: &[CanonicalRoot],
-    tx: &broadcast::Sender<ChangeEvent>,
+    dispatcher: &Dispatcher,
     include_extensions: &[String],
     ignore_set: &GlobSet,
     include_glob_set: Option<&GlobSet>,
@@ -95,7 +95,7 @@ fn dispatch(
     for event in &events {
         if let Some(change) = to_change_event(event, canonical_roots) {
             if is_visible(&change.path, canonical_roots, include_extensions, ignore_set, include_glob_set) {
-                let _ = tx.send(change);
+                dispatcher.send(change);
             }
         }
     }
@@ -117,6 +117,8 @@ fn is_visible(
 
 /// notify 事件 → [`ChangeEvent`],同时将物理路径转换为逻辑路径。
 /// 仅处理内容相关的变动(Create/Remove/Modify/Rename),元数据变更不推送。
+/// 对仍存在于磁盘的文件(Create/Modify/Rename)stat 一次填入 `modified_at`,
+/// 使事件携带时间戳;Delete 文件已不存在,保持 `None`。
 fn to_change_event(
     event: &DebouncedEvent,
     canonical_roots: &[CanonicalRoot],
@@ -124,40 +126,45 @@ fn to_change_event(
     use notify::EventKind::*;
     use notify::event::{ModifyKind, RenameMode};
 
-    let (kind, path, from) = match event.kind {
+    // disk_path:事件结束后文件在磁盘上的物理路径,用于 stat 取 mtime;Delete 为 None。
+    let (kind, path, from, disk_path): (_, _, _, Option<&Path>) = match event.kind {
         Create(_) => {
-            let p = logical(event.paths.first()?, canonical_roots)?;
-            (ChangeKind::Created, p, None)
+            let phys = event.paths.first()?;
+            (ChangeKind::Created, logical(phys, canonical_roots)?, None, Some(phys))
         }
         Remove(_) => {
             let p = logical(event.paths.first()?, canonical_roots)?;
-            (ChangeKind::Deleted, p, None)
+            (ChangeKind::Deleted, p, None, None)
         }
         // debouncer-full 在 rename 时将 from+to 放在同一事件,paths = [from, to]
         Modify(ModifyKind::Name(RenameMode::Both)) => {
             let from = logical(event.paths.first()?, canonical_roots)?;
-            let to = logical(event.paths.get(1)?, canonical_roots)?;
-            (ChangeKind::Renamed, to, Some(from))
+            let to_phys = event.paths.get(1)?;
+            (ChangeKind::Renamed, logical(to_phys, canonical_roots)?, Some(from), Some(to_phys))
         }
         // 只收到 From(To 丢失)→按删除处理
         Modify(ModifyKind::Name(RenameMode::From)) => {
             let p = logical(event.paths.first()?, canonical_roots)?;
-            (ChangeKind::Deleted, p, None)
+            (ChangeKind::Deleted, p, None, None)
         }
         // 只收到 To(From 丢失)→按创建处理
         Modify(ModifyKind::Name(RenameMode::To)) => {
-            let p = logical(event.paths.first()?, canonical_roots)?;
-            (ChangeKind::Created, p, None)
+            let phys = event.paths.first()?;
+            (ChangeKind::Created, logical(phys, canonical_roots)?, None, Some(phys))
         }
         Modify(ModifyKind::Data(_) | ModifyKind::Any | ModifyKind::Other) => {
-            let p = logical(event.paths.first()?, canonical_roots)?;
-            (ChangeKind::Modified, p, None)
+            let phys = event.paths.first()?;
+            (ChangeKind::Modified, logical(phys, canonical_roots)?, None, Some(phys))
         }
         // 仅元数据/Access/其他 → 不推送
         _ => return None,
     };
 
-    Some(ChangeEvent { kind, path, from, modified_at: None })
+    let modified_at = disk_path
+        .and_then(|p| std::fs::metadata(p).ok())
+        .and_then(|m| m.modified().ok());
+
+    Some(ChangeEvent { kind, path, from, modified_at })
 }
 
 /// 物理路径 → 逻辑路径「root 名/相对路径」。不匹配任何 root 时返回 `None`。

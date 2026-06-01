@@ -14,7 +14,10 @@ pub struct FileContent {
     pub content: String,
     /// 文件在磁盘上的字节数(非 UTF-8 字符数)。
     pub size: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::time_fmt::serialize_opt"
+    )]
     pub modified_at: Option<SystemTime>,
     /// ETag 值(带引号),如 `"\"1234567890\""`,用于 HTTP `If-None-Match` 条件请求。
     #[serde(skip_serializing_if = "Option::is_none")]

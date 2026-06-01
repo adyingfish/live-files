@@ -5,11 +5,13 @@
 //! server crate 仅把这些能力包装成 HTTP/SSE,核心逻辑全在这里。
 
 mod config;
+mod dispatch;
 pub mod events;
 mod path;
 mod poll;
 mod read;
 mod scan;
+mod time_fmt;
 mod visibility;
 mod watch;
 
@@ -58,8 +60,13 @@ impl Watcher {
     /// `config.poll_interval` 为 `Some` 时启动。
     pub fn new(config: Config) -> Result<Self> {
         let (tx, _) = tokio::sync::broadcast::channel(256);
-        let handle = watch::start(&config, tx.clone())?;
-        let poll = config.poll_interval.map(|_| poll::start(&config, tx.clone()));
+        // notify 与轮询两路共用一个去重投递器,抑制对同一变动的重复上报。
+        let dispatcher =
+            std::sync::Arc::new(dispatch::Dispatcher::new(tx.clone(), dedup_window(&config)));
+        let handle = watch::start(&config, std::sync::Arc::clone(&dispatcher))?;
+        let poll = config
+            .poll_interval
+            .map(|_| poll::start(&config, std::sync::Arc::clone(&dispatcher)));
         Ok(Self { config, tx, _watch: std::sync::Mutex::new(handle), _poll: poll })
     }
 
@@ -76,6 +83,15 @@ impl Watcher {
     /// 订阅文件变动事件,供 SSE 等长连接消费(每个订阅者各持一个接收端)。
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<ChangeEvent> {
         self.tx.subscribe()
+    }
+}
+
+/// 去重时间窗:需覆盖 notify 投递与下一次轮询扫描之间的间隔,故取
+/// 轮询间隔 + 去抖;轮询关闭时不存在重复来源,取去抖即可。
+fn dedup_window(config: &Config) -> std::time::Duration {
+    match config.poll_interval {
+        Some(interval) => interval + config.debounce,
+        None => config.debounce,
     }
 }
 

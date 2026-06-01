@@ -8,9 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use tokio::sync::broadcast;
 
-use crate::{Config, events::{ChangeEvent, ChangeKind}, visibility};
+use crate::{Config, dispatch::Dispatcher, events::{ChangeEvent, ChangeKind}, visibility};
 
 /// 逻辑路径 → (mtime, 字节数)
 type Snapshot = HashMap<String, (SystemTime, u64)>;
@@ -33,8 +32,8 @@ impl Drop for PollHandle {
 }
 
 /// 启动轮询线程,按 `config.poll_interval` 间隔扫描文件系统,
-/// 将差异事件通过 `tx` 广播。返回的 [`PollHandle`] drop 时停止线程。
-pub fn start(config: &Config, tx: broadcast::Sender<ChangeEvent>) -> PollHandle {
+/// 将差异事件经 `dispatcher` 去重后广播。返回的 [`PollHandle`] drop 时停止线程。
+pub fn start(config: &Config, dispatcher: Arc<Dispatcher>) -> PollHandle {
     let interval = config.poll_interval.expect("poll::start called with poll_interval=None");
 
     let roots: Vec<RootInfo> = config
@@ -71,7 +70,7 @@ pub fn start(config: &Config, tx: broadcast::Sender<ChangeEvent>) -> PollHandle 
                 }
                 let curr = take_snapshot(&roots, &include_extensions, &ignore_set, include_glob_set.as_ref());
                 for event in diff(&prev, &curr) {
-                    let _ = tx.send(event);
+                    dispatcher.send(event);
                 }
                 prev = curr;
             }
